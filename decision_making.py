@@ -1,3 +1,4 @@
+from math import dist
 from deap import base, creator
 import random
 import numpy as np
@@ -17,11 +18,11 @@ erStationA = {'fireEngineA': 5, 'fireEngineB': 2, 'fireFastResponse': 5,
 erStationB = {'fireEngineA': 2, 'fireEngineB': 1, 'fireFastResponse': 3,
               'ambulance': 2, 'medicalFastResponse': 2, 'policePatrolCar': 3, 'trafficPoliceBike': 2}
 
-capabilities = ['oil', 'chemical', 'electrical', 'injury-serious',
-                'injury-light', 'robbery', 'breakin', 'traffic accident', 'traffic control']
+capabilities = ['oil', 'chemical', 'electrical', 'injury',
+                'robbery', 'breakin', 'traffic accident', 'traffic control']
 effects = ['supress', 'control', 'evacuate', 'investigate', 'arrest']
 
-sizes = ['small', 'medium', 'large']
+sizes = ['small', 'medium', 'large', 'light', 'serious', 'simple']
 
 
 class Assets:
@@ -34,14 +35,14 @@ class Assets:
 
 
 fireEngineA = Assets(asset='fireEngineA', speed=80, capability=['oil', 'chemical', 'electrical'],
-                     prep_time=5, effectiveness=['supress'])
+                     prep_time=5, effectiveness=['supress','control'])
 fireEngineB = Assets(asset='fireEngineB', speed=90, capability=['chemical', 'electrical'],
-                     prep_time=3, effectiveness=['supress'])
+                     prep_time=3, effectiveness=['supress','control'])
 fireFastResponse = Assets(asset='fireFastResponse', speed=100, capability=['electrical'],
                           prep_time=2, effectiveness=['control'])
-ambulance = Assets(asset='ambulance', speed=80, capability=['injury-serious', 'injury-light'],
+ambulance = Assets(asset='ambulance', speed=80, capability=['injury'],
                    prep_time=5, effectiveness=['control', 'evacuate'])
-medicalFastResponse = Assets(asset='medicalFastResponse', speed=100, capability=['injury-light'],
+medicalFastResponse = Assets(asset='medicalFastResponse', speed=100, capability=['injury'],
                              prep_time=2, effectiveness=['investigate', 'arrest', 'control'])
 policePatrolCar = Assets(asset='policePatrolCar', speed=100,
                          capability=['robbery', 'breakin', 'traffic accident', 'traffic control'],
@@ -97,6 +98,8 @@ def getCost(situationlist, situationqueue, individual):
     total_units = 0
     # total requirement for different situations
     total_req = 0
+    time_penalty = 1
+    bonus_time = 0
     allVehiclesTime = []
     for k in alloc.keys(): # Loop through the vehicles dict
         total_units += sum(alloc[k][0]) + sum(alloc[k][1]) #Update total units to be deployed
@@ -126,17 +129,50 @@ def getCost(situationlist, situationqueue, individual):
                     if elem.solution in unit.effectiveness:
                         num_effective_units += sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1])
                         # if the asset would be able to reach in time
-                        if int(HARD_CONSTRAINT_PENALTY * int(unit.speed/ 60 *
-                            (elem.timeTaken - unit.prep_time) * sum(alloc[unit.asset][0]) > elem.dist['a'])):
-                            num_ontime_units += sum(alloc[unit.asset][0])
-                            
-                        elif int(HARD_CONSTRAINT_PENALTY * int(unit.speed/ 60 *
-                            (elem.timeTaken - unit.prep_time) * sum(alloc[unit.asset][1]) > elem.dist['b'])):
-                            num_ontime_units += sum(alloc[unit.asset][1])
+                    # timer = ((elem.dist['a'] / alloc[unit.asset][0]) * 60) + unit.prep_time
+                    # timer_b = ((elem.dist['b'] / unit.speed) * 60) + unit.prep_time
+                    # extra_time = elem.timeTaken - timer
+                    # if extra_time >= 0:
+                    #     time_penalty = 0
+                    #     bonus_time += extra_time
+                    # else:
+                    #     pass
 
-                        for vehicleTime in allVehiclesTime:
-                            if elem.timeTaken < vehicleTime:
-                                num_timing += sum(alloc[unit.asset][0])
+                    # elif timer_b >= elem.timeTaken:
+                    #     num_ontime_units += sum(alloc[unit.asset][1])
+                    distance = (unit.speed / 60) * (elem.timeTaken - unit.prep_time)
+                    for x in alloc[unit.asset][0]:
+                        if distance > elem.dist['a']:
+                            time_penalty = 0
+                            extra_time = distance / (unit.speed / 60)
+                            bonus_time += extra_time
+                        else:
+                            pass
+                    for x in alloc[unit.asset][1]:
+                        if distance > elem.dist['b']:
+                            time_penalty = 0
+                            extra_time = distance / (unit.speed / 60)
+                            bonus_time += extra_time
+                        else:
+                            pass
+                    # distance_a = int(HARD_CONSTRAINT_PENALTY * int(unit.speed/ 60 *
+                    #     (elem.timeTaken - unit.prep_time) * sum(alloc[unit.asset][0])))
+                    # distance_b = int(HARD_CONSTRAINT_PENALTY * int(unit.speed/ 60 *
+                    #     (elem.timeTaken - unit.prep_time) * sum(alloc[unit.asset][1])))
+                    
+                        # num_ontime_units += sum(alloc[unit.asset][0])
+                        # num_timing += sum(alloc[unit.asset][0])
+                    # elif distance_b > elem.dist['b']:
+                    #     time_penalty = 0
+                    #     extra_time = distance_b / (unit.speed / 60)
+                    #     bonus_time += extra_time
+
+                        # num_ontime_units += sum(alloc[unit.asset][1])
+                        # num_timing += sum(alloc[unit.asset][0])
+                    # for vehicleTime in allVehiclesTime:
+                    #     if elem.timeTaken < vehicleTime:
+                    #         num_timing += sum(alloc[unit.asset][0])
+                    # print ("Time: ", num_timing)
             # calculate the cost basis the numbers calculated above
             """
             Constrains violations: 
@@ -146,11 +182,13 @@ def getCost(situationlist, situationqueue, individual):
             """
             # units available - units with solution + units that meet time criteria - units with solution + units required - units available
             cost += HARD_CONSTRAINT_PENALTY * abs(num_capable_units - num_effective_units) + \
-                    HARD_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units) + \
-                    HARD_CONSTRAINT_PENALTY * abs(elem.numUnits - num_capable_units) + \
-                    SOFT_CONSTRAINT_PENALTY * abs(num_timing)
-# WRONG_NUM_UNITS * abs(num_ontime_units - num_effective_units) + \
+                    SOFT_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units) + \
+                    HARD_CONSTRAINT_PENALTY * abs(elem.numUnits - num_capable_units)
+            print (bonus_time)
+                    # HARD_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units)
     # difference in total number of assets required and assigned is added
+    cost += HARD_CONSTRAINT_PENALTY * time_penalty
+    cost += SOFT_CONSTRAINT_PENALTY * (-1 * bonus_time)
     cost += abs(total_units - total_req) * HARD_CONSTRAINT_PENALTY
     return cost
 
@@ -232,7 +270,10 @@ def main():
     situationPriorityQueue = {
         'small': [],
         'medium': [],
-        'large': []
+        'large': [],
+        'light': [],
+        'serious': [],
+        'simple': []
     }
 
     for i in range(n):
@@ -241,10 +282,10 @@ def main():
             dist_b = int(input('What is the distance from station B:'))
             situation = input('What is the Situation?\n')
             solution = input('What solution is needed?\n')
-            sType = input('What is the size of situation? small, medium or large\n')
+            sType = input('What is the size of situation? small, medium, large, simple, serious or light?\n')
             timeTaken = int(input('What is the maximum time which can be taken:'))
 
-            situations = {'small': 1, 'medium': 2, 'large': 3, 'injury/light': 1, 'injury/serious': 1, 'crime/simple': 1, 'crime/serious': 2}
+            situations = {'small': 1, 'medium': 2, 'large': 3, 'light': 1, 'serious': 2, 'simple': 1}
             numUnits = situations[sType.lower()]
 
             # Validity Checks - if input is in stored list
