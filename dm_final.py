@@ -6,10 +6,14 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from deap import tools
 from deap import algorithms
+import pandas as pd
 import datetime
+import time
 import json
+
 # penalty factors - if capability is incorrect/ if effectiveness is incorrect/ if number of units doesn't match the
 # requirements
+
 SOFT_CONSTRAINT_PENALTY = 0.5
 HARD_CONSTRAINT_PENALTY = 10
 
@@ -26,6 +30,7 @@ sizes = ['small', 'medium', 'large', 'light', 'serious', 'simple']
 
 priority_level = [1, 2, 3]
 
+
 class Assets:
     def __init__(self, asset, speed, capability, prep_time, effectiveness):
         self.asset = asset
@@ -36,9 +41,9 @@ class Assets:
 
 
 fireEngineA = Assets(asset='fireEngineA', speed=80, capability=['oil', 'chemical', 'electrical'],
-                     prep_time=5, effectiveness=['supress','control'])
+                     prep_time=5, effectiveness=['supress', 'control'])
 fireEngineB = Assets(asset='fireEngineB', speed=90, capability=['chemical', 'electrical'],
-                     prep_time=3, effectiveness=['supress','control'])
+                     prep_time=3, effectiveness=['supress', 'control'])
 fireFastResponse = Assets(asset='fireFastResponse', speed=100, capability=['electrical'],
                           prep_time=2, effectiveness=['control'])
 ambulance = Assets(asset='ambulance', speed=80, capability=['injury'],
@@ -54,27 +59,26 @@ trafficPoliceBike = Assets(asset='trafficPoliceBike', speed=120,
 
 
 # function to convert the individual to a dictionary having different units for both the stations
-def getallocation(stations, listofavailableunits , individual):
+def getallocation(stations, listofavailableunits, individual):
     allocation = {}
     last_index = 0
     for unit in listofavailableunits:
         allocation[unit.asset] = {}
-        for i,station in enumerate(stations):
-            #Going through each vehicle in each station and giving it a random deployment [0,0] or [1,1]
-             allocation[unit.asset][i] = individual[last_index : (last_index + station[unit.asset])]
-             last_index = (last_index + station[unit.asset])
+        for i, station in enumerate(stations):
+            # Going through each vehicle in each station and giving it a random deployment [0,0] or [1,1]
+            allocation[unit.asset][i] = individual[last_index: (last_index + station[unit.asset])]
+            last_index = (last_index + station[unit.asset])
     return allocation
 
 
 class Situation:
-    def __init__(self, distFromA, distFromB, situation, solution, numUnits, timeTaken, priority): #Can add timetaken
+    def __init__(self, distFromA, distFromB, situation, solution, numUnits, timeTaken, priority):  # Can add timetaken
         self.dist = {'a': distFromA, 'b': distFromB}
         self.situation = situation
         self.solution = solution
         self.numUnits = numUnits
         self.timeTaken = timeTaken
         self.priority = priority
-
 
     def print(self, number, sType):
         print('\nSituation ' + str(number) + ': ' + sType)
@@ -83,13 +87,20 @@ class Situation:
         print(self.solution)
         print(self.priority)
 
+# Changes
+# Earlier there was no penalty for incorrect allocation have had it which now prevents incorrect allocations
+# Earlier whether allocation was to stationA or stationB it made no difference - now it is factored in and we track allocations for different situations
+# Earlier cost calculations didn't take into account allocations already done for multiple situations which lead to incorrect cost calculation
+
 # calculate the cost for any individual
 # individual is a list of binary values indicating whether the asset is assigned or not
 def getCost(situationlist, situationqueue, individual):
     cost = 0
+
     # convert the individual list to a dictionary
-    
-    alloc = getallocation(stations, listofavailableunits, individual) #Takes in All units and all stations and randomized individual list
+    alloc = getallocation(stations, listofavailableunits,
+                          individual)  # Takes in All units and all stations and randomized individual list
+
     """
     Run getallocation to provide a deployment list from the station EG:
     {'fireEngineA': {0: [0, 0, 1, 1, 0], 1: [1, 1]}, 'fireEngineB': {0: [1, 1], 1: [0]}, 
@@ -102,82 +113,128 @@ def getCost(situationlist, situationqueue, individual):
     total_units = 0
     # total requirement for different situations
     total_req = 0
+
+    # not needed
     time_penalty = 1
     bonus_time = 0
-    allVehiclesTime = []
-    for k in alloc.keys(): # Loop through the vehicles dict
-        total_units += sum(alloc[k][0]) + sum(alloc[k][1]) #Update total units to be deployed
 
-    # for prio in priority_que:
+    allVehiclesTime = []
+
+
+    # have added tracking for already allotted units
+    alloted_units = {}
+
+    # [0, 0] for stationA and stationB
+    for k in alloc.keys():  # Loop through the vehicles dict
+        total_units += sum(alloc[k][0]) + sum(alloc[k][1])  # Update total units to be deployed
+        alloted_units[k] = [0,0]
+        alloted_units[k][0] = 0
+        alloted_units[k][1] = 0
+
+
     # for all the situations in the queue
     for key in situationqueue.keys():
         # elements in small/ medium/ large sizes
         for elem in situationqueue[key]:
-            # retrieve the element from situation list
+
+           # retrieve the element from situation list
             elem = situationList[elem]
 
             # penalty is calculated such the if capability is addressed along with effectiveness and time penalty is 0
-            num_capable_units = 0 # How many units in total
-            num_effective_units = 0 # How many units that cover the solution
-            num_ontime_units = 0 # Units that would reach on time
-            num_timing = 0 # Units compared to each other based on their time
-            
+            num_capable_units = 0  # How many units in total
+            num_effective_units = 0  # How many units that cover the solution
+            num_ontime_units = 0  # Units that would reach on time
+            num_timing = 0  # Units compared to each other based on their time
+
             total_req += elem.numUnits
+
             # for all the assets in the list
             for unit in listofavailableunits:
                 allVehiclesTime.append(unit.prep_time)
+
                 # if situation is there in the asset capability
-                if elem.situation in unit.capability: # Checks if vehicle fits the scenario required
-                    # check the number of such assets assigned in the allocation by the individual
-                    num_capable_units += sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1]) # Count how many units assigned
+                if elem.situation in unit.capability:  # Checks if vehicle fits the scenario required
+                    # calculate already allocated assets for this particular unit (to previously encountered situations)
+                    alloted_units_asset = alloted_units[unit.asset][0] + alloted_units[unit.asset][1]
+
+                    # check the number of such assets assigned in the allocation
+                    # earlier we were not using information about allotted units to different situations
+                    # say individual for fireEngineA is [1, 0, 1, 0, 1] - means 3 units have been assigned for all the situations we are considering
+                    # 1 to situation A, 0 to situation B and so on - earlier we were using 3 for cost calculaiions.
+                    # minimum is used as for any situation allocation can be <= numUnits
+                    num_capable_units += min(
+                        sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1]) - alloted_units_asset,
+                        elem.numUnits)  # Count how many units assigned
+
                     # if effectiveness is also addressed
                     if elem.solution in unit.effectiveness:
-                        num_effective_units += sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1])
-                        
-                        
-                    distance = (unit.speed / 60) * (elem.timeTaken - unit.prep_time)
-                    for x in alloc[unit.asset][0]:
-                        if distance > elem.dist['a']:
-                            time_penalty = 0
-                            extra_time = distance / (unit.speed / 60)
-                            bonus_time += extra_time
-                        else:
-                            pass
-                    for x in alloc[unit.asset][1]:
-                        if distance > elem.dist['b']:
-                            time_penalty = 0
-                            extra_time = distance / (unit.speed / 60)
-                            bonus_time += extra_time
-                        else:
-                            pass
+                        # if effective number of effective assets would also be governed by the same equation
+                        num_effective_units += min(
+                        sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1]) - alloted_units_asset,
+                        elem.numUnits)
 
-            # calculate the cost basis the numbers calculated above
-            """
-            Constrains violations: 
-            num_capable_units is how many violations for the situation, EG: Oil or electrical
-            num_effective_units is how many violations for the solutions, EG: Supress, Control
-            num_ontime_units is how many violations for the time, EG: which vehicle is faster with prep time
-            """
+                        # time taken to reach from station A
+                        time_from_station_A = elem.dist['a'] / (unit.speed / 60) + unit.prep_time
+
+                        # based on the priority for time > 0 priority 3 has the highest penalty and for time < 0 4 - priority
+                        #is done for it to have the minimum penalth
+                        priority_wt = elem.priority if (time_from_station_A - elem.timeTaken) > 0 else (
+                                    4 - elem.priority)
+
+                        # using the priority weight and soft penalty we calculate the time penalty (or bonus if it is less than target)
+                        time_penalty_A = SOFT_CONSTRAINT_PENALTY * (time_from_station_A - elem.timeTaken) * priority_wt
+
+                        # similarly from B
+                        time_from_station_B = elem.dist['b'] / (unit.speed / 60) + unit.prep_time
+                        priority_wt = elem.priority if (time_from_station_B - elem.timeTaken) > 0 else (
+                                4 - elem.priority)
+
+                        time_penalty_B = SOFT_CONSTRAINT_PENALTY * (time_from_station_B - elem.timeTaken) * priority_wt
+
+                        # if penalty from A is less than B or all the allocated units from stationB have already be allocated in previous situations
+                        #  Also all units for stationA must already not be assigned to previous situations
+                        if (time_penalty_A < time_penalty_B or sum(alloc[unit.asset][1]) <= alloted_units[unit.asset][1]) and \
+                                sum(alloc[unit.asset][0]) > alloted_units[unit.asset][1]:
+                            # assign the units to stations A and calculate cost accordingly
+                            alloted_units[unit.asset][0] += elem.numUnits
+                            cost += time_penalty_A * SOFT_CONSTRAINT_PENALTY
+                        else:
+                            alloted_units[unit.asset][1] += elem.numUnits
+                            cost += time_penalty_B * SOFT_CONSTRAINT_PENALTY
+
+                else:
+                    # to prevent incorrect allocations if unit is not capable for the situation yet has been assigned we penalize it
+                    alloted_units_asset = alloted_units[unit.asset][0] + alloted_units[unit.asset][1]
+                    if (sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1]) - alloted_units_asset) > 0:
+                        cost += HARD_CONSTRAINT_PENALTY * HARD_CONSTRAINT_PENALTY * (
+                                    sum(alloc[unit.asset][0]) + sum(alloc[unit.asset][1]) - alloted_units_asset)
+
+                # calculate the cost basis the numbers calculated above
+                """
+                Constrains violations: 
+                num_capable_units is how many violations for the situation, EG: Oil or electrical
+                num_effective_units is how many violations for the solutions, EG: Supress, Control
+                num_ontime_units is how many violations for the time, EG: which vehicle is faster with prep time
+                """
+
             # units available - units with solution + units that meet time criteria - units with solution + units required - units available
-            cost += HARD_CONSTRAINT_PENALTY * abs(num_capable_units - num_effective_units) + \
-                    SOFT_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units) + \
-                    HARD_CONSTRAINT_PENALTY * abs(elem.numUnits - num_capable_units) 
-                    # HARD_CONSTRAINT_PENALTY * abs(elem.priority - num_effective_units)
+            cost += (HARD_CONSTRAINT_PENALTY * abs(num_capable_units - num_effective_units) +
+                     SOFT_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units) +
+                     HARD_CONSTRAINT_PENALTY * abs(elem.numUnits - num_capable_units)) * elem.priority
 
-    cost += HARD_CONSTRAINT_PENALTY * time_penalty
-    cost += SOFT_CONSTRAINT_PENALTY * (-1 * bonus_time)
     cost += abs(total_units - total_req) * HARD_CONSTRAINT_PENALTY
     return cost
 
+
 def eaSimpleWithElitism(
-    population,
-    toolbox,
-    cxpb,
-    mutpb,
-    ngen,
-    stats=None,
-    halloffame=None,
-    verbose=__debug__,
+        population,
+        toolbox,
+        cxpb,
+        mutpb,
+        ngen,
+        stats=None,
+        halloffame=None,
+        verbose=__debug__,
 ):
     """This algorithm is similar to DEAP eaSimple() algorithm, with the modification that
     halloffame is used to implement an elitism mechanism. The individuals contained in the
@@ -230,7 +287,9 @@ def eaSimpleWithElitism(
 
         # Append the current generation statistics to the logbook
         record = stats.compile(population) if stats else {}
+
         logbook.record(gen=gen, nevals=len(invalid_ind), **record)
+
         if verbose:
             print(logbook.stream)
 
@@ -278,32 +337,34 @@ def main():
             if priority not in priority_level:
                 print('Invalid Priority level, choose: 1, 2 or 3')
                 continue
-            
-            newSituation = Situation(dist_a, dist_b, situation, solution, numUnits, timeTaken, priority) #Can add timetaken
+
+            newSituation = Situation(dist_a, dist_b, situation, solution, numUnits, timeTaken,
+                                     priority)  # Can add timetaken
             situationList.append(newSituation)
             newSituation.print(i, sType)
             situationPriorityQueue[sType].append(i)
             break
     return situationList, situationPriorityQueue
 
+
 if __name__ == '__main__':
     situationList, situationPriorityQueue = main()
 
-
     listofavailableunits = [fireEngineA, fireEngineB, fireFastResponse, ambulance, medicalFastResponse, policePatrolCar,
                             trafficPoliceBike]
-    individual_length = 0
 
+    individual_length = 0
+    #
     stations = [erStationA, erStationB]
 
-    for  unit in listofavailableunits: # Go through the list of available units
-        for station in stations: # Go through the list of stations
-            if unit.asset in station: # Check whether the unit required is within the station or not
-                individual_length += station[unit.asset] # Records all vehicles within each station (total)
+    for unit in listofavailableunits:  # Go through the list of available units
+        for station in stations:  # Go through the list of stations
+            if unit.asset in station:  # Check whether the unit required is within the station or not
+                individual_length += station[unit.asset]  # Records all vehicles within each station (total)
 
-    individual = [0] * individual_length # Starts Base with all 0's
+    individual = [0] * individual_length  # Starts Base with all 0's
 
-    RANDOM_SEED = 33 # Choose randomness factor
+    RANDOM_SEED = 33  # Choose randomness factor
     random.seed(RANDOM_SEED)
 
     # define a single objective, maximizing fitness strategy:
@@ -312,7 +373,7 @@ if __name__ == '__main__':
     # create the Individual class based on list:
     creator.create("Individual", list, fitness=creator.FitnessMin)
 
-    #Base toolbox created and saved
+    # Base toolbox created and saved
     toolbox = base.Toolbox()
 
     nsp_length = individual_length
@@ -324,25 +385,27 @@ if __name__ == '__main__':
     # create the population operator to generate a list of individuals:
     toolbox.register("populationCreator", tools.initRepeat, list, toolbox.individualCreator)
 
+
     # fitness calculation
     def fitness_func(individual):
-        return getCost(situationList , situationPriorityQueue, individual),  # return a tuple
+        return getCost(situationList, situationPriorityQueue, individual),  # return a tuple
+
 
     toolbox.register("evaluate", fitness_func)
 
     # genetic operators:
     toolbox.register("select", tools.selTournament, tournsize=2)
     toolbox.register("mate", tools.cxTwoPoint)
-    toolbox.register("mutate", tools.mutFlipBit, indpb=1.0/nsp_length)
+    toolbox.register("mutate", tools.mutFlipBit, indpb=1.0 / nsp_length)
 
     # Genetic Algorithm constants:
-    POPULATION_SIZE = 300
-    P_CROSSOVER = 0.9  # probability for crossover
-    P_MUTATION = 0.1   # probability for mutating an individual
-    MAX_GENERATIONS = 200
+    POPULATION_SIZE = 200
+    P_CROSSOVER = 0.2  # probability for crossover
+    P_MUTATION = 0.2  # probability for mutating an individual
+    MAX_GENERATIONS = 300
     HALL_OF_FAME_SIZE = 30
 
-    population = toolbox.populationCreator(n=POPULATION_SIZE) # Creates population
+    population = toolbox.populationCreator(n=POPULATION_SIZE)  # Creates population
 
     # prepare the statistics object:
     stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -353,7 +416,7 @@ if __name__ == '__main__':
     hof = tools.HallOfFame(HALL_OF_FAME_SIZE)
 
     population, logbook = eaSimpleWithElitism(population, toolbox, cxpb=P_CROSSOVER, mutpb=P_MUTATION,
-                                                  ngen=MAX_GENERATIONS, stats=stats, halloffame=hof, verbose=True)
+                                              ngen=MAX_GENERATIONS, stats=stats, halloffame=hof, verbose=True)
 
     # print best solution found:
     best = hof.items[0]
@@ -364,6 +427,7 @@ if __name__ == '__main__':
     print("-- Schedule = ")
     print(getallocation(stations, listofavailableunits, best))
 
+    getCost(situationList, situationPriorityQueue, best)
     # extract statistics:
     minFitnessValues, meanFitnessValues = logbook.select("min", "avg")
     # with open('results.txt', 'a') as outfile:
@@ -382,3 +446,6 @@ if __name__ == '__main__':
     plt.title('Min and Average fitness over Generations')
     plt.legend()
     plt.show()
+
+
+

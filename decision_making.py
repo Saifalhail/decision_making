@@ -146,8 +146,8 @@ def getCost(situationlist, situationqueue, individual):
             """
             # units available - units with solution + units that meet time criteria - units with solution + units required - units available
             cost += HARD_CONSTRAINT_PENALTY * abs(num_capable_units - num_effective_units) + \
-                    HARD_CONSTRAINT_PENALTY * 0.1 * abs(num_ontime_units - num_effective_units) + \
-                    HARD_CONSTRAINT_PENALTY * 250 * abs(elem.numUnits - num_capable_units) + \
+                    HARD_CONSTRAINT_PENALTY * abs(num_ontime_units - num_effective_units) + \
+                    HARD_CONSTRAINT_PENALTY * abs(elem.numUnits - num_capable_units) + \
                     SOFT_CONSTRAINT_PENALTY * abs(num_timing)
 # WRONG_NUM_UNITS * abs(num_ontime_units - num_effective_units) + \
     # difference in total number of assets required and assigned is added
